@@ -45,7 +45,7 @@ class _Background extends StatelessWidget {
           children: [
             Image.asset('assets/images/wallpaper.png', fit: BoxFit.cover),
             Container(
-              color: Colors.black.withOpacity(isDark ? 0.78 : 0.35),
+              color: Colors.black.withOpacity(isDark ? 0.45 : 0.35),
             ),
             child,
           ],
