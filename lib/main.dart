@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'mail_handler.dart';
+import 'splash_screen.dart';
 
 // ── Notifier global de tema ──────────────────────────────────────────────────
 final _themeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
@@ -82,7 +83,7 @@ class MyApp extends StatelessWidget {
           ),
           brightness: Brightness.dark,
         ),
-        home: const MyHomePage(),
+        home: const SplashScreen(),
       ),
     );
   }
@@ -95,7 +96,7 @@ class MyHomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Dyleger Demo App'),
+        title: const Text('Demo App'),
         backgroundColor: const Color(0xFF616161).withOpacity(0.85),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -103,11 +104,12 @@ class MyHomePage extends StatelessWidget {
       ),
       body: _Background(
         child: Center(
-          child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _MenuButton(
-              label: 'Facturas',
+          child: SingleChildScrollView(
+            child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _MenuButton(
+                label: 'Facturas',
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const FacturasPage()),
@@ -130,15 +132,16 @@ class MyHomePage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            _MenuButton(
-              label: 'Ventas',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const VentasPage()),
+              _MenuButton(
+                label: 'Ventas',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VentasPage()),
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
+          ),
         ),
       ),
     );
@@ -186,7 +189,7 @@ class _FacturasPageState extends State<FacturasPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Dyleger Demo App'),
+        title: const Text('Demo App'),
         backgroundColor: const Color(0xFF616161).withOpacity(0.85),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -194,8 +197,15 @@ class _FacturasPageState extends State<FacturasPage> {
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final hPad = (constraints.maxWidth * 0.08).clamp(16.0, 40.0);
+            final vPad = (constraints.maxHeight * 0.05).clamp(16.0, 48.0);
+            final btnWidth = (constraints.maxWidth * 0.33).clamp(100.0, 160.0);
+            final btnHeight = (constraints.maxHeight * 0.065).clamp(44.0, 56.0);
+            final titleSize = (constraints.maxWidth * 0.05).clamp(15.0, 22.0);
+            return Padding(
+          padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
           child: ValueListenableBuilder<ThemeMode>(
             valueListenable: _themeNotifier,
             builder: (_, mode, __) {
@@ -217,9 +227,9 @@ class _FacturasPageState extends State<FacturasPage> {
                   Text(
                     'Modulo de Envio de Facturas',
                     style: TextStyle(
-                      fontSize: 20,
+                      fontSize: titleSize,
                       fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : Colors.white,
+                      color: Colors.white,
                       shadows: [
                         Shadow(
                           color: Colors.black.withOpacity(0.85),
@@ -297,8 +307,8 @@ class _FacturasPageState extends State<FacturasPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       SizedBox(
-                        width: 130,
-                        height: 48,
+                        width: btnWidth,
+                        height: btnHeight,
                         child: ElevatedButton(
                           onPressed: () => Navigator.pop(context),
                           style: ElevatedButton.styleFrom(
@@ -308,12 +318,12 @@ class _FacturasPageState extends State<FacturasPage> {
                             side: BorderSide(color: btnCancelSide),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
-                          child: const Text('Cancelar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                          child: const Text('Cancelar', style: TextStyle(fontWeight: FontWeight.w600)),
                         ),
                       ),
                       SizedBox(
-                        width: 130,
-                        height: 48,
+                        width: btnWidth,
+                        height: btnHeight,
                         child: ElevatedButton(
                           onPressed: _sending ? null : () async {
                             _checkEmail();
@@ -334,6 +344,7 @@ class _FacturasPageState extends State<FacturasPage> {
                                 duration: const Duration(seconds: 3),
                               ),
                             );
+                            if (ok) Navigator.pop(context);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: btnSendBg,
@@ -342,7 +353,7 @@ class _FacturasPageState extends State<FacturasPage> {
                           ),
                           child: _sending
                               ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                              : const Text('Enviar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                              : const Text('Enviar', style: TextStyle(fontWeight: FontWeight.w600)),
                         ),
                       ),
                     ],
@@ -351,6 +362,8 @@ class _FacturasPageState extends State<FacturasPage> {
               );
             },
           ),
+        );
+          },
         ),
       ),
     );
@@ -364,24 +377,28 @@ class _MenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final btnWidth = (size.width * 0.72).clamp(200.0, 340.0);
+    final btnHeight = (size.height * 0.065).clamp(44.0, 64.0);
+    final fontSize = (size.width * 0.038).clamp(13.0, 18.0);
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: _themeNotifier,
       builder: (_, mode, __) {
         final isDark = mode == ThemeMode.dark;
         return SizedBox(
-          width: 280,
-          height: 52,
+          width: btnWidth,
+          height: btnHeight,
           child: ElevatedButton(
             onPressed: onTap ?? () {},
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? Colors.white : const Color(0xFF0D2B6B),
               foregroundColor: isDark ? const Color(0xFF0D2B6B) : Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
             ),
-            child: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            child: Text(label, style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w600)),
           ),
         );
       },
@@ -433,7 +450,7 @@ class _ModulePageState extends State<_ModulePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Dyleger Demo App'),
+        title: const Text('Demo App'),
         backgroundColor: const Color(0xFF616161).withOpacity(0.85),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -441,8 +458,15 @@ class _ModulePageState extends State<_ModulePage> {
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
-        child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final hPad = (constraints.maxWidth * 0.08).clamp(16.0, 40.0);
+            final vPad = (constraints.maxHeight * 0.05).clamp(16.0, 48.0);
+            final btnWidth = (constraints.maxWidth * 0.33).clamp(100.0, 160.0);
+            final btnHeight = (constraints.maxHeight * 0.065).clamp(44.0, 56.0);
+            final titleSize = (constraints.maxWidth * 0.05).clamp(15.0, 22.0);
+            return Padding(
+        padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
         child: ValueListenableBuilder<ThemeMode>(
           valueListenable: _themeNotifier,
           builder: (_, mode, __) {
@@ -463,7 +487,7 @@ class _ModulePageState extends State<_ModulePage> {
                 Text(
                   widget.titulo,
                   style: TextStyle(
-                    fontSize: 20,
+                    fontSize: titleSize,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                     shadows: [
@@ -543,8 +567,8 @@ class _ModulePageState extends State<_ModulePage> {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     SizedBox(
-                      width: 130,
-                      height: 48,
+                      width: btnWidth,
+                      height: btnHeight,
                       child: ElevatedButton(
                         onPressed: () => Navigator.pop(context),
                         style: ElevatedButton.styleFrom(
@@ -554,12 +578,12 @@ class _ModulePageState extends State<_ModulePage> {
                           side: BorderSide(color: btnCancelSide),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
-                        child: const Text('Cancelar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                        child: const Text('Cancelar', style: TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ),
                     SizedBox(
-                      width: 130,
-                      height: 48,
+                      width: btnWidth,
+                      height: btnHeight,
                       child: ElevatedButton(
                         onPressed: _sending ? null : () async {
                           _checkEmail();
@@ -580,6 +604,7 @@ class _ModulePageState extends State<_ModulePage> {
                               duration: const Duration(seconds: 3),
                             ),
                           );
+                          if (ok) Navigator.pop(context);
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: btnSendBg,
@@ -588,7 +613,7 @@ class _ModulePageState extends State<_ModulePage> {
                         ),
                         child: _sending
                             ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                            : const Text('Enviar', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                            : const Text('Enviar', style: TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ),
                   ],
@@ -597,9 +622,11 @@ class _ModulePageState extends State<_ModulePage> {
             );
           },
         ),
+      );
+          },
+        ),
       ),
-    ),
-  );
+    );
   }
 }
 

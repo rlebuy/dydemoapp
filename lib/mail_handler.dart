@@ -76,11 +76,11 @@ class MailHandler {
       return false;
     }
 
-    final subject = 'Dyleger Demo App – $module';
+    final subject = 'Rednet Demo App – $module';
 
     final htmlBody = '''
       <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2 style="color: #0D2B6B;">Dyleger Demo App – $module</h2>
+        <h2 style="color: #0D2B6B;">Rednet and Dyleger Demo App – $module</h2>
         <hr>
         <p><strong>De:</strong> $recipientEmail</p>
         <hr>

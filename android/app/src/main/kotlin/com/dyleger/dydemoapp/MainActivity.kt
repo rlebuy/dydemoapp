@@ -1,4 +1,4 @@
-package com.example.dydemoapp
+package com.dyleger.dydemoapp
 
 import io.flutter.embedding.android.FlutterActivity
 
