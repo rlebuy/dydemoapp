@@ -69,7 +69,7 @@ class MyApp extends StatelessWidget {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: _themeNotifier,
       builder: (_, mode, __) => MaterialApp(
-        title: 'Dyleger Demo',
+        title: 'Rednet Demo App',
         debugShowCheckedModeBanner: false,
         themeMode: mode,
         theme: ThemeData(
@@ -96,7 +96,7 @@ class MyHomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Demo App'),
+        title: const Text('Rednet Demo App'),
         backgroundColor: const Color(0xFF616161).withOpacity(0.85),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -189,7 +189,7 @@ class _FacturasPageState extends State<FacturasPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Demo App'),
+        title: const Text('Redent Demo App'),
         backgroundColor: const Color(0xFF616161).withOpacity(0.85),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -450,7 +450,7 @@ class _ModulePageState extends State<_ModulePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Demo App'),
+        title: const Text('Rednet Demo App'),
         backgroundColor: const Color(0xFF616161).withOpacity(0.85),
         foregroundColor: Colors.white,
         elevation: 0,
