@@ -659,15 +659,11 @@ class _FacturasPageState extends State<FacturasPage> {
     }
 
     try {
-      final response = await http
-          .post(
-            Uri.parse(apiUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 15));
+      final queryParams = payload.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+      final uri = Uri.parse(apiUrl).replace(queryParameters: queryParams);
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
       if (response.statusCode != 200) {
-        return fallbackGet('HTTP ${response.statusCode}');
+        return {'ok': false, 'error': 'HTTP ${response.statusCode}'};
       }
       final decoded = jsonDecode(response.body);
       if (decoded is Map<String, dynamic> && decoded['success'] == true) {
@@ -1420,9 +1416,9 @@ class _SoportePageState extends State<SoportePage> {
           'error': (decoded['error'] ?? 'Respuesta no exitosa').toString(),
         };
       }
-      return fallbackGet('Respuesta inválida del servidor');
+      return {'ok': false, 'error': 'Respuesta inválida del servidor'};
     } catch (e) {
-      return fallbackGet(e.toString());
+      return {'ok': false, 'error': e.toString()};
     }
   }
 
@@ -1826,11 +1822,553 @@ class _SoportePageState extends State<SoportePage> {
   }
 }
 
-class EnviosPage extends StatelessWidget {
+class _Envio {
+  final String objeto;
+  final String codigo;
+  final String correo;
+  final String estado;
+  final String fechaEntrega;
+  final String direccion;
+  final String transportista;
+  final String ultimaActualizacion;
+
+  const _Envio({
+    required this.objeto,
+    required this.codigo,
+    required this.correo,
+    required this.estado,
+    required this.fechaEntrega,
+    required this.direccion,
+    required this.transportista,
+    required this.ultimaActualizacion,
+  });
+
+  factory _Envio.fromJson(Map<String, dynamic> json) => _Envio(
+    objeto: (json['objeto'] ?? '').toString(),
+    codigo: (json['codigo_envio'] ?? '').toString(),
+    correo: (json['correo'] ?? '').toString(),
+    estado: (json['estado'] ?? 'Pendiente').toString(),
+    fechaEntrega: (json['fecha_entrega'] ?? '').toString(),
+    direccion: (json['direccion'] ?? '').toString(),
+    transportista: (json['transportista'] ?? '').toString(),
+    ultimaActualizacion: (json['ultima_actualizacion'] ?? '').toString(),
+  );
+}
+
+class EnviosPage extends StatefulWidget {
   const EnviosPage({super.key});
   @override
-  Widget build(BuildContext context) =>
-      const _ModulePage(titulo: 'Envios', action: 'envios');
+  State<EnviosPage> createState() => _EnviosPageState();
+}
+
+class _EnviosPageState extends State<EnviosPage> {
+  List<_Envio> _envios = [];
+  _Envio? _selected;
+  List<Map<String, dynamic>> _historial = [];
+  bool _loading = false;
+  bool _loadingHistorial = false;
+  bool _savingGestion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEnvios();
+  }
+
+  Future<void> _loadEnvios() async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) return;
+    setState(() => _loading = true);
+    try {
+      final response = await http.get(Uri.parse('$apiUrl?action=envios')).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          final items = decoded.whereType<Map<String, dynamic>>().map(_Envio.fromJson).toList();
+          setState(() {
+            _envios = items;
+            if (_selected != null) {
+              _selected = items.where((e) => e.codigo == _selected!.codigo).cast<_Envio?>().firstWhere(
+                    (e) => e != null,
+                    orElse: () => items.isNotEmpty ? items.first : null,
+                  );
+            } else if (items.isNotEmpty) {
+              _selected = items.first;
+            }
+          });
+          if (_selected != null) {
+            await _loadHistorial(_selected!.codigo);
+          }
+        }
+      }
+    } catch (_) {
+      // no-op
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadHistorial(String codigo) async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty || codigo.isEmpty) return;
+    setState(() => _loadingHistorial = true);
+    try {
+      final uri = Uri.parse('$apiUrl?action=actividad&modulo=envios&codigo=$codigo');
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          setState(() {
+            _historial = decoded.whereType<Map<String, dynamic>>().toList();
+          });
+        } else {
+          setState(() => _historial = []);
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _historial = []);
+    } finally {
+      if (mounted) setState(() => _loadingHistorial = false);
+    }
+  }
+
+  String _normalizarEstado(String value) {
+    final v = value.trim().toLowerCase();
+    if (v.contains('entreg')) return 'Entregado';
+    if (v.contains('transit')) return 'En tránsito';
+    if (v.contains('despach')) return 'Despachado';
+    if (v.contains('incid')) return 'Incidencia';
+    if (v.contains('prepar')) return 'Preparación';
+    if (v.contains('gest')) return 'En gestión';
+    return 'Pendiente';
+  }
+
+  int get _enTransitoCount => _envios.where((e) => _normalizarEstado(e.estado) == 'En tránsito').length;
+  int get _entregadosCount => _envios.where((e) => _normalizarEstado(e.estado) == 'Entregado').length;
+  int get _incidenciasCount => _envios.where((e) => _normalizarEstado(e.estado) == 'Incidencia').length;
+  String get _proximoEntrega {
+    final valores = _envios
+        .map((e) => e.fechaEntrega.trim())
+        .where((v) => v.isNotEmpty)
+        .toList()
+      ..sort();
+    return valores.isEmpty ? 'Sin fecha' : valores.first;
+  }
+
+  Future<void> _registrarGestion(String tipo, String titulo) async {
+    if (_selected == null || _savingGestion) return;
+    final comentarioController = TextEditingController();
+    final comentario = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(titulo),
+        content: TextField(
+          controller: comentarioController,
+          maxLines: 4,
+          decoration: const InputDecoration(hintText: 'Describe brevemente el motivo...'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, comentarioController.text.trim()),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || comentario == null || comentario.isEmpty) return;
+
+    setState(() => _savingGestion = true);
+    try {
+      final payload = {
+        'action': 'registrar_gestion_envio',
+        'codigo_envio': _selected!.codigo,
+        'tipo': tipo,
+        'comentario': comentario,
+        'usuario': 'app',
+      };
+      final registroResp = await _postEnvioActivity(payload);
+      if (!mounted) return;
+      if (registroResp['ok'] == true) {
+        final envio = _selected!;
+        final tipoLabel = _tipoGestionLabel(tipo);
+        final mailBody = _buildEnvioActivityMailBody(
+          envio: envio,
+          tipoLabel: tipoLabel,
+          comentario: comentario,
+        );
+        final recipient = _resolveEnvioRecipient(envio);
+        final mailOk = recipient != null &&
+            await MailHandler.sendMessage(
+              recipientEmail: recipient,
+              body: mailBody,
+              module: 'Envios',
+              subject: 'Envios: ${envio.codigo} - $tipoLabel',
+            );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              mailOk
+                  ? 'Gestión registrada y correo enviado'
+                  : (recipient == null
+                      ? 'Gestión registrada, pero no hay correo destino'
+                      : 'Gestión registrada, pero falló el correo'),
+            ),
+            backgroundColor: mailOk ? Colors.green : Colors.orange,
+          ),
+        );
+        await _loadEnvios();
+        if (_selected != null) await _loadHistorial(_selected!.codigo);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text((registroResp['error'] ?? 'Error al registrar').toString()),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo registrar la gestión'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _savingGestion = false);
+    }
+  }
+
+  String _tipoGestionLabel(String tipo) {
+    switch (tipo) {
+      case 'incidencia':
+        return 'Reporte de incidencia';
+      case 'cambio_direccion':
+        return 'Solicitud de cambio de dirección';
+      case 'reprogramacion':
+        return 'Solicitud de reprogramación';
+      case 'autorizacion_tercero':
+        return 'Autorización de recepción por tercero';
+      default:
+        return tipo;
+    }
+  }
+
+  String _buildEnvioActivityMailBody({
+    required _Envio envio,
+    required String tipoLabel,
+    required String comentario,
+  }) {
+    final data = <String>[
+      'Actividad en Envios',
+      'Código envío: ${envio.codigo}',
+      'Objeto: ${envio.objeto}',
+      'Tipo de actividad: $tipoLabel',
+      'Estado actual: ${_normalizarEstado(envio.estado)}',
+      'Correo cliente: ${envio.correo}',
+    ];
+    if (envio.fechaEntrega.trim().isNotEmpty) {
+      data.add('Fecha entrega: ${envio.fechaEntrega}');
+    }
+    if (envio.direccion.trim().isNotEmpty) {
+      data.add('Dirección: ${envio.direccion}');
+    }
+    if (envio.transportista.trim().isNotEmpty) {
+      data.add('Transportista: ${envio.transportista}');
+    }
+    if (envio.ultimaActualizacion.trim().isNotEmpty) {
+      data.add('Última actualización: ${envio.ultimaActualizacion}');
+    }
+    data
+      ..add('Comentario de gestión: $comentario')
+      ..add('Fecha registro: ${DateTime.now().toIso8601String()}')
+      ..add('Usuario: app');
+    return data.join('\n');
+  }
+
+  String? _resolveEnvioRecipient(_Envio envio) {
+    final envioMail = envio.correo.trim();
+    if (_validEmail(envioMail)) return envioMail;
+
+    final destinations = (dotenv.env['DESTINATION_EMAIL'] ?? '')
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => _validEmail(e))
+        .toList();
+    if (destinations.isNotEmpty) return destinations.first;
+
+    final mailFrom = (dotenv.env['EMAIL'] ?? '').trim();
+    if (_validEmail(mailFrom)) return mailFrom;
+    return null;
+  }
+
+  bool _validEmail(String v) {
+    return RegExp(r'^[\w.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$').hasMatch(v.trim());
+  }
+
+  Future<Map<String, dynamic>> _postEnvioActivity(Map<String, dynamic> payload) async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) {
+      return {'ok': false, 'error': 'API no configurada en .env'};
+    }
+
+    try {
+      final queryParams = payload.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+      final uri = Uri.parse(apiUrl).replace(queryParameters: queryParams);
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        return {'ok': false, 'error': 'HTTP ${response.statusCode}'};
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+        return {'ok': true};
+      }
+      if (decoded is Map<String, dynamic>) {
+        return {
+          'ok': false,
+          'error': (decoded['error'] ?? 'Respuesta no exitosa').toString(),
+        };
+      }
+      return {'ok': false, 'error': 'Respuesta inválida del servidor'};
+    } catch (e) {
+      return {'ok': false, 'error': e.toString()};
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Rednet'),
+        backgroundColor: const Color(0xFF616161).withOpacity(0.85),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        actions: const [_ThemeToggle()],
+      ),
+      body: _Background(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: ValueListenableBuilder<ThemeMode>(
+            valueListenable: _themeNotifier,
+            builder: (_, mode, __) {
+              final isDark = mode == ThemeMode.dark;
+              final cardBg = isDark ? Colors.black.withOpacity(0.40) : Colors.white.withOpacity(0.72);
+              final textColor = isDark ? Colors.white : Colors.black87;
+              final border = isDark ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.15);
+              final muted = isDark ? Colors.white70 : Colors.black54;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Envios',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black.withOpacity(0.9),
+                          blurRadius: 6,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: cardBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: border),
+                    ),
+                    child: Wrap(
+                      runSpacing: 8,
+                      spacing: 12,
+                      children: [
+                        Text('En tránsito: $_enTransitoCount', style: TextStyle(color: textColor, fontWeight: FontWeight.w600)),
+                        Text('Entregados: $_entregadosCount', style: TextStyle(color: textColor)),
+                        Text('Con incidencia: $_incidenciasCount', style: TextStyle(color: textColor)),
+                        Text('Próxima entrega: $_proximoEntrega', style: TextStyle(color: textColor)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    height: 155,
+                    decoration: BoxDecoration(
+                      color: cardBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: border),
+                    ),
+                    child: _loading
+                        ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                        : _envios.isEmpty
+                            ? Center(child: Text('Sin envíos disponibles', style: TextStyle(color: muted)))
+                            : ListView.separated(
+                                itemCount: _envios.length,
+                                separatorBuilder: (_, __) => Divider(height: 1, color: border),
+                                itemBuilder: (_, i) {
+                                  final e = _envios[i];
+                                  final selected = _selected?.codigo == e.codigo;
+                                  return ListTile(
+                                    dense: true,
+                                    selected: selected,
+                                    selectedTileColor: (isDark ? Colors.white : const Color(0xFF0D2B6B)).withOpacity(0.12),
+                                    title: Text('Envío ${e.codigo}', style: TextStyle(color: textColor, fontWeight: FontWeight.w600)),
+                                    subtitle: Text('${e.objeto} · ${_normalizarEstado(e.estado)}', style: TextStyle(color: muted)),
+                                    onTap: () async {
+                                      setState(() => _selected = e);
+                                      await _loadHistorial(e.codigo);
+                                    },
+                                  );
+                                },
+                              ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: border),
+                            ),
+                            child: _selected == null
+                                ? Text('Selecciona un envío para ver detalle', style: TextStyle(color: muted))
+                                : Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Detalle de envío', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                      const SizedBox(height: 8),
+                                      Text('Código: ${_selected!.codigo}', style: TextStyle(color: textColor)),
+                                      Text('Objeto: ${_selected!.objeto}', style: TextStyle(color: textColor)),
+                                      Text('Estado: ${_normalizarEstado(_selected!.estado)}', style: TextStyle(color: textColor)),
+                                      Text('Correo: ${_selected!.correo}', style: TextStyle(color: textColor)),
+                                      if (_selected!.fechaEntrega.trim().isNotEmpty)
+                                        Text('Fecha entrega: ${_selected!.fechaEntrega}', style: TextStyle(color: textColor)),
+                                      if (_selected!.direccion.trim().isNotEmpty)
+                                        Text('Dirección: ${_selected!.direccion}', style: TextStyle(color: textColor)),
+                                      if (_selected!.transportista.trim().isNotEmpty)
+                                        Text('Transportista: ${_selected!.transportista}', style: TextStyle(color: textColor)),
+                                      if (_selected!.ultimaActualizacion.trim().isNotEmpty)
+                                        Text('Última actualización: ${_selected!.ultimaActualizacion}', style: TextStyle(color: textColor)),
+                                    ],
+                                  ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: border),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Acciones', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('incidencia', 'Reportar incidencia'),
+                                      child: const Text('Reportar incidencia'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('cambio_direccion', 'Solicitar cambio de dirección'),
+                                      child: const Text('Cambiar dirección'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('reprogramacion', 'Solicitar reprogramación'),
+                                      child: const Text('Reprogramar entrega'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('autorizacion_tercero', 'Autorizar recepción por tercero'),
+                                      child: const Text('Autorizar tercero'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: border),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Historial', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                if (_selected == null)
+                                  Text('Selecciona un envío para ver actividad', style: TextStyle(color: muted))
+                                else if (_loadingHistorial)
+                                  const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                                else if (_historial.isEmpty)
+                                  Text('Sin actividad registrada', style: TextStyle(color: muted))
+                                else
+                                  ..._historial.map((e) {
+                                    final tipo = (e['tipo'] ?? '').toString();
+                                    final detalle = (e['detalle'] ?? '').toString();
+                                    final fecha = (e['fecha'] ?? '').toString();
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: Text('• [$tipo] $detalle${fecha.isNotEmpty ? ' ($fecha)' : ''}',
+                                          style: TextStyle(color: textColor)),
+                                    );
+                                  }),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isDark ? Colors.white : const Color(0xFF0D2B6B),
+                                foregroundColor: isDark ? const Color(0xFF0D2B6B) : Colors.white,
+                                textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Text('Volver'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class VentasPage extends StatelessWidget {

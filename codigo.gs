@@ -16,6 +16,8 @@ function doGet(e) {
     return getActividad(sheet, e);
   } else if (action == "registrar_gestion_factura") {
     return registrarGestionFactura(sheet, e.parameter || {});
+  } else if (action == "registrar_gestion_envio") {
+    return registrarGestionEnvio(sheet, e.parameter || {});
   } else if (action == "actualizar_estado_soporte") {
     return actualizarEstadoSoporte(sheet, e.parameter || {});
   } else if (action == "agregar_comentario_soporte") {
@@ -50,6 +52,9 @@ function doPost(e) {
   if (!payload.codigo_factura && e.parameter && e.parameter.codigo_factura) {
     payload.codigo_factura = e.parameter.codigo_factura;
   }
+  if (!payload.codigo_envio && e.parameter && e.parameter.codigo_envio) {
+    payload.codigo_envio = e.parameter.codigo_envio;
+  }
   if (!payload.tipo && e.parameter && e.parameter.tipo) {
     payload.tipo = e.parameter.tipo;
   }
@@ -62,6 +67,8 @@ function doPost(e) {
     return agregarComentarioSoporte(sheet, payload);
   } else if (action == "registrar_gestion_factura") {
     return registrarGestionFactura(sheet, payload);
+  } else if (action == "registrar_gestion_envio") {
+    return registrarGestionEnvio(sheet, payload);
   }
 
   return jsonResponse({
@@ -146,16 +153,33 @@ function getFacturas(sheet) {
 
 // 📦 Envios
 function getEnvios(sheet) {
-  var data = sheet.getSheetByName("Envio").getDataRange().getValues();
+  var sh = sheet.getSheetByName("Envio");
+  if (!sh) return jsonResponse([]);
+  var data = sh.getDataRange().getValues();
+  if (data.length < 2) return jsonResponse([]);
+  var headerMap = getHeaderIndexMap(sh);
+  function fromHeaderOrIndex(header, fallback) {
+    return Object.prototype.hasOwnProperty.call(headerMap, header) ? headerMap[header] : fallback;
+  }
+  var estadoIndex = fromHeaderOrIndex("estado", 3);
+  var fechaEntregaIndex = fromHeaderOrIndex("fecha_entrega", 4);
+  var direccionIndex = fromHeaderOrIndex("direccion", 5);
+  var transportistaIndex = fromHeaderOrIndex("transportista", 6);
+  var actualizacionIndex = fromHeaderOrIndex("ultima_actualizacion", 7);
   var result = [];
   for (var i = 1; i < data.length; i++) {
     result.push({
       objeto: data[i][0],
       codigo_envio: data[i][1],
-      correo: data[i][2]
+      correo: data[i][2],
+      estado: estadoIndex >= 0 ? (data[i][estadoIndex] || "Pendiente") : "Pendiente",
+      fecha_entrega: fechaEntregaIndex >= 0 ? asIsoDate(data[i][fechaEntregaIndex]) : "",
+      direccion: direccionIndex >= 0 ? (data[i][direccionIndex] || "") : "",
+      transportista: transportistaIndex >= 0 ? (data[i][transportistaIndex] || "") : "",
+      ultima_actualizacion: actualizacionIndex >= 0 ? asIsoDate(data[i][actualizacionIndex]) : ""
     });
   }
-  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  return jsonResponse(result);
 }
 
 // 🛠️ Soportes
@@ -210,10 +234,10 @@ function getUsuarios(sheet) {
 function getActividad(sheet, e) {
   var modulo = (e.parameter.modulo || "").toString().trim().toLowerCase();
   var codigo = (e.parameter.codigo || "").toString().trim();
-  if ((modulo != "soportes" && modulo != "facturas") || !codigo) {
+  if ((modulo != "soportes" && modulo != "facturas" && modulo != "envios") || !codigo) {
     return jsonResponse({
       success: false,
-      error: "Parámetros inválidos. Usa modulo=soportes|facturas y codigo=<codigo>."
+      error: "Parámetros inválidos. Usa modulo=soportes|facturas|envios y codigo=<codigo>."
     });
   }
 
@@ -268,6 +292,15 @@ function findFacturaRowByCodigo(sh, codigoFactura) {
   return -1;
 }
 
+
+function findEnvioRowByCodigo(sh, codigoEnvio) {
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var codigo = (data[i][1] || "").toString().trim();
+    if (codigo == codigoEnvio) return i + 1;
+  }
+  return -1;
+}
 function registrarGestionFactura(sheet, payload) {
   var codigoFactura = (payload.codigo_factura || "").toString().trim();
   var tipo = (payload.tipo || "").toString().trim().toLowerCase();
@@ -302,6 +335,37 @@ function registrarGestionFactura(sheet, payload) {
     comentario,
     usuario
   );
+  return jsonResponse({ success: true });
+}
+
+function registrarGestionEnvio(sheet, payload) {
+  var codigoEnvio = (payload.codigo_envio || "").toString().trim();
+  var tipo = (payload.tipo || "").toString().trim().toLowerCase();
+  var comentario = (payload.comentario || "").toString().trim();
+  var usuario = (payload.usuario || "app").toString().trim();
+  if (!codigoEnvio || !tipo || !comentario) {
+    return jsonResponse({ success: false, error: "codigo_envio, tipo y comentario son obligatorios." });
+  }
+
+  var envioSheet = sheet.getSheetByName("Envio");
+  if (!envioSheet) {
+    return jsonResponse({ success: false, error: "No existe la hoja Envio." });
+  }
+  var rowNumber = findEnvioRowByCodigo(envioSheet, codigoEnvio);
+  if (rowNumber < 0) {
+    return jsonResponse({ success: false, error: "No se encontró el envío." });
+  }
+
+  var estadoCol = ensureColumn(envioSheet, "estado") + 1;
+  var actualizacionCol = ensureColumn(envioSheet, "ultima_actualizacion") + 1;
+  var nuevoEstado = "En gestión";
+  if (tipo == "incidencia") nuevoEstado = "Incidencia";
+  if (tipo == "cambio_direccion") nuevoEstado = "En gestión";
+  if (tipo == "reprogramacion") nuevoEstado = "En gestión";
+  if (tipo == "autorizacion_tercero") nuevoEstado = "En gestión";
+  envioSheet.getRange(rowNumber, estadoCol).setValue(nuevoEstado);
+  envioSheet.getRange(rowNumber, actualizacionCol).setValue(new Date());
+  appendActividadModulo(sheet, "envios", tipo, codigoEnvio, comentario, usuario);
   return jsonResponse({ success: true });
 }
 
