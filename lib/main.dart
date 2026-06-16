@@ -892,8 +892,15 @@ class _FacturasPageState extends State<FacturasPage> {
                           const SizedBox(height: 12),
                           SizedBox(
                             width: double.infinity,
-                            child: OutlinedButton(
+                            height: 48,
+                            child: ElevatedButton(
                               onPressed: () => Navigator.pop(context),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isDark ? Colors.white : const Color(0xFF0D2B6B),
+                                foregroundColor: isDark ? const Color(0xFF0D2B6B) : Colors.white,
+                                textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
                               child: const Text('Volver'),
                             ),
                           ),
