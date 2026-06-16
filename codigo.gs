@@ -14,6 +14,8 @@ function doGet(e) {
     return getUsuarios(sheet);
   } else if (action == "actividad") {
     return getActividad(sheet, e);
+  } else if (action == "registrar_gestion_factura") {
+    return registrarGestionFactura(sheet, e.parameter || {});
   } else if (action == "actualizar_estado_soporte") {
     return actualizarEstadoSoporte(sheet, e.parameter || {});
   } else if (action == "agregar_comentario_soporte") {
@@ -45,6 +47,12 @@ function doPost(e) {
   if (!payload.comentario && e.parameter && e.parameter.comentario) {
     payload.comentario = e.parameter.comentario;
   }
+  if (!payload.codigo_factura && e.parameter && e.parameter.codigo_factura) {
+    payload.codigo_factura = e.parameter.codigo_factura;
+  }
+  if (!payload.tipo && e.parameter && e.parameter.tipo) {
+    payload.tipo = e.parameter.tipo;
+  }
   if (!payload.usuario && e.parameter && e.parameter.usuario) {
     payload.usuario = e.parameter.usuario;
   }
@@ -52,6 +60,8 @@ function doPost(e) {
     return actualizarEstadoSoporte(sheet, payload);
   } else if (action == "agregar_comentario_soporte") {
     return agregarComentarioSoporte(sheet, payload);
+  } else if (action == "registrar_gestion_factura") {
+    return registrarGestionFactura(sheet, payload);
   }
 
   return jsonResponse({
@@ -103,16 +113,35 @@ function asIsoDate(value) {
 }
 // 📄 Facturas
 function getFacturas(sheet) {
-  var data = sheet.getSheetByName("Factura").getDataRange().getValues();
+  var sh = sheet.getSheetByName("Factura");
+  if (!sh) return jsonResponse([]);
+  var data = sh.getDataRange().getValues();
+  if (data.length < 2) return jsonResponse([]);
+  var headerMap = getHeaderIndexMap(sh);
+  function fromHeaderOrIndex(header, fallback) {
+    return Object.prototype.hasOwnProperty.call(headerMap, header) ? headerMap[header] : fallback;
+  }
+  var estadoIndex = fromHeaderOrIndex("estado", 7);
+  var actualizacionIndex = fromHeaderOrIndex("ultima_actualizacion", 8);
+  var emisionIndex = fromHeaderOrIndex("fecha_emision", 3);
+  var vencimientoIndex = fromHeaderOrIndex("fecha_vencimiento", 4);
+  var detalleIndex = fromHeaderOrIndex("detalle", 5);
+  var impuestoIndex = fromHeaderOrIndex("impuesto", 6);
   var result = [];
   for (var i = 1; i < data.length; i++) {
     result.push({
       codigo: data[i][0],
       monto: data[i][1],
-      correo: data[i][2]
+      correo: data[i][2],
+      fecha_emision: asIsoDate(data[i][emisionIndex]),
+      fecha_vencimiento: asIsoDate(data[i][vencimientoIndex]),
+      detalle: detalleIndex >= 0 ? (data[i][detalleIndex] || "") : "",
+      impuesto: impuestoIndex >= 0 ? (data[i][impuestoIndex] || "") : "",
+      estado: estadoIndex >= 0 ? (data[i][estadoIndex] || "Pendiente") : "Pendiente",
+      ultima_actualizacion: actualizacionIndex >= 0 ? asIsoDate(data[i][actualizacionIndex]) : ""
     });
   }
-  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  return jsonResponse(result);
 }
 
 // 📦 Envios
@@ -181,10 +210,10 @@ function getUsuarios(sheet) {
 function getActividad(sheet, e) {
   var modulo = (e.parameter.modulo || "").toString().trim().toLowerCase();
   var codigo = (e.parameter.codigo || "").toString().trim();
-  if (modulo != "soportes" || !codigo) {
+  if ((modulo != "soportes" && modulo != "facturas") || !codigo) {
     return jsonResponse({
       success: false,
-      error: "Parámetros inválidos. Usa modulo=soportes y codigo=<codigo_ticket>."
+      error: "Parámetros inválidos. Usa modulo=soportes|facturas y codigo=<codigo>."
     });
   }
 
@@ -195,7 +224,7 @@ function getActividad(sheet, e) {
   for (var i = 1; i < data.length; i++) {
     var rowModulo = (data[i][0] || "").toString().trim().toLowerCase();
     var rowCodigo = (data[i][1] || "").toString().trim();
-    if (rowModulo == "soportes" && rowCodigo == codigo) {
+    if (rowModulo == modulo && rowCodigo == codigo) {
       rows.push({
         modulo: data[i][0],
         codigo: data[i][1],
@@ -219,11 +248,61 @@ function findSoporteRowByCodigo(sh, codigoTicket) {
 }
 
 function appendActividad(sheet, tipo, codigoTicket, detalle, usuario) {
+  return appendActividadModulo(sheet, "soportes", tipo, codigoTicket, detalle, usuario);
+}
+
+function appendActividadModulo(sheet, modulo, tipo, codigo, detalle, usuario) {
   var activitySheet = getOrCreateSheetByName(sheet, "Actividad");
   if (activitySheet.getLastRow() == 0) {
     activitySheet.appendRow(["modulo", "codigo", "tipo", "detalle", "usuario", "fecha"]);
   }
-  activitySheet.appendRow(["soportes", codigoTicket, tipo, detalle, usuario || "app", new Date()]);
+  activitySheet.appendRow([modulo, codigo, tipo, detalle, usuario || "app", new Date()]);
+}
+
+function findFacturaRowByCodigo(sh, codigoFactura) {
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var codigo = (data[i][0] || "").toString().trim();
+    if (codigo == codigoFactura) return i + 1;
+  }
+  return -1;
+}
+
+function registrarGestionFactura(sheet, payload) {
+  var codigoFactura = (payload.codigo_factura || "").toString().trim();
+  var tipo = (payload.tipo || "").toString().trim().toLowerCase();
+  var comentario = (payload.comentario || "").toString().trim();
+  var usuario = (payload.usuario || "app").toString().trim();
+  if (!codigoFactura || !tipo || !comentario) {
+    return jsonResponse({ success: false, error: "codigo_factura, tipo y comentario son obligatorios." });
+  }
+
+  var facturaSheet = sheet.getSheetByName("Factura");
+  if (!facturaSheet) {
+    return jsonResponse({ success: false, error: "No existe la hoja Factura." });
+  }
+  var rowNumber = findFacturaRowByCodigo(facturaSheet, codigoFactura);
+  if (rowNumber < 0) {
+    return jsonResponse({ success: false, error: "No se encontró la factura." });
+  }
+
+  var estadoCol = ensureColumn(facturaSheet, "estado") + 1;
+  var actualizacionCol = ensureColumn(facturaSheet, "ultima_actualizacion") + 1;
+  var nuevoEstado = "En revisión";
+  if (tipo == "problema") nuevoEstado = "En revisión";
+  if (tipo == "prorroga") nuevoEstado = "En revisión";
+  if (tipo == "plan_pago") nuevoEstado = "En revisión";
+  facturaSheet.getRange(rowNumber, estadoCol).setValue(nuevoEstado);
+  facturaSheet.getRange(rowNumber, actualizacionCol).setValue(new Date());
+  appendActividadModulo(
+    sheet,
+    "facturas",
+    tipo,
+    codigoFactura,
+    comentario,
+    usuario
+  );
+  return jsonResponse({ success: true });
 }
 
 function actualizarEstadoSoporte(sheet, payload) {

@@ -329,11 +329,586 @@ class MyHomePage extends StatelessWidget {
   }
 }
 
-class FacturasPage extends StatelessWidget {
+class _Factura {
+  final String codigo;
+  final String montoRaw;
+  final String correo;
+  final String estado;
+  final String fechaEmision;
+  final String fechaVencimiento;
+  final String detalle;
+  final String impuesto;
+  final String ultimaActualizacion;
+
+  const _Factura({
+    required this.codigo,
+    required this.montoRaw,
+    required this.correo,
+    required this.estado,
+    required this.fechaEmision,
+    required this.fechaVencimiento,
+    required this.detalle,
+    required this.impuesto,
+    required this.ultimaActualizacion,
+  });
+
+  double get monto {
+    final sanitized = montoRaw.replaceAll('.', '').replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.\-]'), '');
+    return double.tryParse(sanitized) ?? 0;
+  }
+
+  factory _Factura.fromJson(Map<String, dynamic> json) => _Factura(
+    codigo: (json['codigo'] ?? '').toString(),
+    montoRaw: (json['monto'] ?? '0').toString(),
+    correo: (json['correo'] ?? '').toString(),
+    estado: (json['estado'] ?? 'Pendiente').toString(),
+    fechaEmision: (json['fecha_emision'] ?? '').toString(),
+    fechaVencimiento: (json['fecha_vencimiento'] ?? '').toString(),
+    detalle: (json['detalle'] ?? '').toString(),
+    impuesto: (json['impuesto'] ?? '').toString(),
+    ultimaActualizacion: (json['ultima_actualizacion'] ?? '').toString(),
+  );
+}
+
+class FacturasPage extends StatefulWidget {
   const FacturasPage({super.key});
   @override
-  Widget build(BuildContext context) =>
-      const _ModulePage(titulo: 'Facturas', action: 'facturas');
+  State<FacturasPage> createState() => _FacturasPageState();
+}
+
+class _FacturasPageState extends State<FacturasPage> {
+  List<_Factura> _facturas = [];
+  _Factura? _selected;
+  List<Map<String, dynamic>> _historial = [];
+  bool _loading = false;
+  bool _loadingHistorial = false;
+  bool _savingGestion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFacturas();
+  }
+
+  Future<void> _loadFacturas() async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) return;
+    setState(() => _loading = true);
+    try {
+      final response = await http.get(Uri.parse('$apiUrl?action=facturas')).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          final items = decoded.whereType<Map<String, dynamic>>().map(_Factura.fromJson).toList();
+          setState(() {
+            _facturas = items;
+            if (_selected != null) {
+              _selected = items.where((f) => f.codigo == _selected!.codigo).cast<_Factura?>().firstWhere(
+                    (e) => e != null,
+                    orElse: () => items.isNotEmpty ? items.first : null,
+                  );
+            } else if (items.isNotEmpty) {
+              _selected = items.first;
+            }
+          });
+          if (_selected != null) {
+            await _loadHistorial(_selected!.codigo);
+          }
+        }
+      }
+    } catch (_) {
+      // no-op
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadHistorial(String codigo) async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty || codigo.isEmpty) return;
+    setState(() => _loadingHistorial = true);
+    try {
+      final uri = Uri.parse('$apiUrl?action=actividad&modulo=facturas&codigo=$codigo');
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          setState(() {
+            _historial = decoded.whereType<Map<String, dynamic>>().toList();
+          });
+        } else {
+          setState(() => _historial = []);
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _historial = []);
+    } finally {
+      if (mounted) setState(() => _loadingHistorial = false);
+    }
+  }
+
+  String _money(double value) => '\$${value.toStringAsFixed(0)}';
+
+  String _normalizarEstado(String value) {
+    final v = value.trim().toLowerCase();
+    if (v.contains('pag')) return 'Pagada';
+    if (v.contains('venc')) return 'Vencida';
+    if (v.contains('revision') || v.contains('revisión')) return 'En revisión';
+    return 'Pendiente';
+  }
+
+  int get _pendientesCount => _facturas.where((f) => _normalizarEstado(f.estado) == 'Pendiente').length;
+  double get _totalPendiente => _facturas
+      .where((f) => _normalizarEstado(f.estado) == 'Pendiente')
+      .fold(0, (acc, f) => acc + f.monto);
+  double get _totalVencido => _facturas
+      .where((f) => _normalizarEstado(f.estado) == 'Vencida')
+      .fold(0, (acc, f) => acc + f.monto);
+  String get _proximoVencimiento {
+    final valores = _facturas
+        .map((f) => f.fechaVencimiento.trim())
+        .where((v) => v.isNotEmpty)
+        .toList()
+      ..sort();
+    return valores.isEmpty ? 'Sin fecha' : valores.first;
+  }
+
+  Future<void> _registrarGestion(String tipo, String titulo) async {
+    if (_selected == null || _savingGestion) return;
+    final comentarioController = TextEditingController();
+    final comentario = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(titulo),
+        content: TextField(
+          controller: comentarioController,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Describe brevemente el motivo...',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, comentarioController.text.trim()),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || comentario == null || comentario.isEmpty) return;
+
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) return;
+
+    setState(() => _savingGestion = true);
+    try {
+      final payload = {
+        'action': 'registrar_gestion_factura',
+        'codigo_factura': _selected!.codigo,
+        'tipo': tipo,
+        'comentario': comentario,
+        'usuario': 'app',
+      };
+      final registroResp = await _postFacturaActivity(payload);
+      if (!mounted) return;
+      if (registroResp['ok'] == true) {
+        final factura = _selected!;
+        final tipoLabel = _tipoGestionLabel(tipo);
+        final mailBody = _buildFacturaActivityMailBody(
+          factura: factura,
+          tipoLabel: tipoLabel,
+          comentario: comentario,
+        );
+        final recipient = _resolveFacturaRecipient(factura);
+        final mailOk = recipient != null &&
+            await MailHandler.sendMessage(
+              recipientEmail: recipient,
+              body: mailBody,
+              module: 'Facturas',
+              subject: 'Facturas: ${factura.codigo} - $tipoLabel',
+            );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              mailOk
+                  ? 'Gestión registrada y correo enviado'
+                  : (recipient == null
+                      ? 'Gestión registrada, pero no hay correo destino'
+                      : 'Gestión registrada, pero falló el correo'),
+            ),
+            backgroundColor: mailOk ? Colors.green : Colors.orange,
+          ),
+        );
+        await _loadFacturas();
+        if (_selected != null) await _loadHistorial(_selected!.codigo);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text((registroResp['error'] ?? 'Error al registrar').toString()),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo registrar la gestión'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _savingGestion = false);
+    }
+  }
+
+  String _tipoGestionLabel(String tipo) {
+    switch (tipo) {
+      case 'problema':
+        return 'Reporte de problema';
+      case 'prorroga':
+        return 'Solicitud de prórroga';
+      case 'plan_pago':
+        return 'Solicitud de plan de pago';
+      default:
+        return tipo;
+    }
+  }
+
+  String _buildFacturaActivityMailBody({
+    required _Factura factura,
+    required String tipoLabel,
+    required String comentario,
+  }) {
+    final data = <String>[
+      'Actividad en Facturas',
+      'Código: ${factura.codigo}',
+      'Tipo de actividad: $tipoLabel',
+      'Estado actual: ${_normalizarEstado(factura.estado)}',
+      'Monto: ${_money(factura.monto)}',
+      'Correo cliente: ${factura.correo}',
+    ];
+    if (factura.fechaEmision.trim().isNotEmpty) {
+      data.add('Fecha emisión: ${factura.fechaEmision}');
+    }
+    if (factura.fechaVencimiento.trim().isNotEmpty) {
+      data.add('Fecha vencimiento: ${factura.fechaVencimiento}');
+    }
+    if (factura.impuesto.trim().isNotEmpty) {
+      data.add('Impuesto: ${factura.impuesto}');
+    }
+    if (factura.detalle.trim().isNotEmpty) {
+      data.add('Detalle factura: ${factura.detalle}');
+    }
+    data
+      ..add('Comentario de gestión: $comentario')
+      ..add('Fecha registro: ${DateTime.now().toIso8601String()}')
+      ..add('Usuario: app');
+    return data.join('\n');
+  }
+
+  String? _resolveFacturaRecipient(_Factura factura) {
+    final facturaMail = factura.correo.trim();
+    if (_validEmail(facturaMail)) return facturaMail;
+
+    final destinations = (dotenv.env['DESTINATION_EMAIL'] ?? '')
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => _validEmail(e))
+        .toList();
+    if (destinations.isNotEmpty) return destinations.first;
+
+    final mailFrom = (dotenv.env['EMAIL'] ?? '').trim();
+    if (_validEmail(mailFrom)) return mailFrom;
+    return null;
+  }
+
+  bool _validEmail(String v) {
+    return RegExp(r'^[\w.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$').hasMatch(v.trim());
+  }
+
+  Future<Map<String, dynamic>> _postFacturaActivity(Map<String, dynamic> payload) async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) {
+      return {'ok': false, 'error': 'API no configurada en .env'};
+    }
+    Map<String, String> queryParams() {
+      return payload.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+    }
+
+    Future<Map<String, dynamic>> fallbackGet([String? reason]) async {
+      try {
+        final uri = Uri.parse(apiUrl).replace(queryParameters: queryParams());
+        final resp = await http.get(uri).timeout(const Duration(seconds: 15));
+        if (resp.statusCode != 200) {
+          return {'ok': false, 'error': 'GET fallback HTTP ${resp.statusCode}'};
+        }
+        final decoded = jsonDecode(resp.body);
+        if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+          return {'ok': true};
+        }
+        if (decoded is Map<String, dynamic>) {
+          return {
+            'ok': false,
+            'error': (decoded['error'] ?? reason ?? 'Respuesta no exitosa').toString(),
+          };
+        }
+        return {'ok': false, 'error': reason ?? 'Respuesta inválida del servidor'};
+      } catch (e) {
+        return {'ok': false, 'error': 'GET fallback: ${e.toString()}'};
+      }
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse(apiUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        return fallbackGet('HTTP ${response.statusCode}');
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+        return {'ok': true};
+      }
+      if (decoded is Map<String, dynamic>) {
+        return {
+          'ok': false,
+          'error': (decoded['error'] ?? 'Respuesta no exitosa').toString(),
+        };
+      }
+      return fallbackGet('Respuesta inválida del servidor');
+    } catch (e) {
+      return fallbackGet(e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Rednet'),
+        backgroundColor: const Color(0xFF616161).withOpacity(0.85),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        actions: const [_ThemeToggle()],
+      ),
+      body: _Background(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: ValueListenableBuilder<ThemeMode>(
+            valueListenable: _themeNotifier,
+            builder: (_, mode, __) {
+              final isDark = mode == ThemeMode.dark;
+              final cardBg = isDark ? Colors.black.withOpacity(0.40) : Colors.white.withOpacity(0.72);
+              final textColor = isDark ? Colors.white : Colors.black87;
+              final border = isDark ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.15);
+              final muted = isDark ? Colors.white70 : Colors.black54;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Facturas',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black.withOpacity(0.9),
+                          blurRadius: 6,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: cardBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: border),
+                    ),
+                    child: Wrap(
+                      runSpacing: 8,
+                      spacing: 12,
+                      children: [
+                        Text('Pendientes: $_pendientesCount', style: TextStyle(color: textColor, fontWeight: FontWeight.w600)),
+                        Text('Total pendiente: ${_money(_totalPendiente)}', style: TextStyle(color: textColor)),
+                        Text('Total vencido: ${_money(_totalVencido)}', style: TextStyle(color: textColor)),
+                        Text('Próximo vencimiento: $_proximoVencimiento', style: TextStyle(color: textColor)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    height: 155,
+                    decoration: BoxDecoration(
+                      color: cardBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: border),
+                    ),
+                    child: _loading
+                        ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                        : _facturas.isEmpty
+                            ? Center(child: Text('Sin facturas disponibles', style: TextStyle(color: muted)))
+                            : ListView.separated(
+                                itemCount: _facturas.length,
+                                separatorBuilder: (_, __) => Divider(height: 1, color: border),
+                                itemBuilder: (_, i) {
+                                  final f = _facturas[i];
+                                  final selected = _selected?.codigo == f.codigo;
+                                  return ListTile(
+                                    dense: true,
+                                    selected: selected,
+                                    selectedTileColor: (isDark ? Colors.white : const Color(0xFF0D2B6B)).withOpacity(0.12),
+                                    title: Text('Factura ${f.codigo}', style: TextStyle(color: textColor, fontWeight: FontWeight.w600)),
+                                    subtitle: Text('${_money(f.monto)} · ${_normalizarEstado(f.estado)}', style: TextStyle(color: muted)),
+                                    onTap: () async {
+                                      setState(() => _selected = f);
+                                      await _loadHistorial(f.codigo);
+                                    },
+                                  );
+                                },
+                              ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: border),
+                            ),
+                            child: _selected == null
+                                ? Text('Selecciona una factura para ver detalle', style: TextStyle(color: muted))
+                                : Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Detalle de factura', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                      const SizedBox(height: 8),
+                                      Text('Código: ${_selected!.codigo}', style: TextStyle(color: textColor)),
+                                      Text('Monto: ${_money(_selected!.monto)}', style: TextStyle(color: textColor)),
+                                      Text('Estado: ${_normalizarEstado(_selected!.estado)}', style: TextStyle(color: textColor)),
+                                      Text('Correo: ${_selected!.correo}', style: TextStyle(color: textColor)),
+                                      if (_selected!.fechaEmision.trim().isNotEmpty)
+                                        Text('Emisión: ${_selected!.fechaEmision}', style: TextStyle(color: textColor)),
+                                      if (_selected!.fechaVencimiento.trim().isNotEmpty)
+                                        Text('Vencimiento: ${_selected!.fechaVencimiento}', style: TextStyle(color: textColor)),
+                                      if (_selected!.impuesto.trim().isNotEmpty)
+                                        Text('Impuesto: ${_selected!.impuesto}', style: TextStyle(color: textColor)),
+                                      if (_selected!.detalle.trim().isNotEmpty)
+                                        Text('Detalle: ${_selected!.detalle}', style: TextStyle(color: textColor)),
+                                      if (_selected!.ultimaActualizacion.trim().isNotEmpty)
+                                        Text('Última actualización: ${_selected!.ultimaActualizacion}', style: TextStyle(color: textColor)),
+                                    ],
+                                  ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: border),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Acciones', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('problema', 'Reportar problema'),
+                                      child: const Text('Reportar problema'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('prorroga', 'Solicitar prórroga'),
+                                      child: const Text('Solicitar prórroga'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('plan_pago', 'Solicitar plan de pago'),
+                                      child: const Text('Solicitar plan de pago'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: border),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Historial', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                if (_selected == null)
+                                  Text('Selecciona una factura para ver actividad', style: TextStyle(color: muted))
+                                else if (_loadingHistorial)
+                                  const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                                else if (_historial.isEmpty)
+                                  Text('Sin actividad registrada', style: TextStyle(color: muted))
+                                else
+                                  ..._historial.map((e) {
+                                    final tipo = (e['tipo'] ?? '').toString();
+                                    final detalle = (e['detalle'] ?? '').toString();
+                                    final fecha = (e['fecha'] ?? '').toString();
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: Text('• [$tipo] $detalle${fecha.isNotEmpty ? ' ($fecha)' : ''}',
+                                          style: TextStyle(color: textColor)),
+                                    );
+                                  }),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Volver'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _MenuButton extends StatelessWidget {
