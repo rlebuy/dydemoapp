@@ -11,7 +11,7 @@ class MailHandler {
   static String get _username => dotenv.env['SMTP_USER'] ?? dotenv.env['EMAIL'] ?? '';
   static String get _password => dotenv.env['PASS'] ?? '';
   static String get _fromAddress => dotenv.env['EMAIL'] ?? '';
-  static String get _fromName => dotenv.env['FROM_NAME'] ?? 'Dyleger Demo App';
+  static String get _fromName => dotenv.env['FROM_NAME'] ?? 'RedNet';
 
   /// Puerto 465 → SSL siempre obligatorio.
   /// Para otros puertos, SMTP_SECURE del .env decide; sin él, false.
@@ -64,23 +64,24 @@ class MailHandler {
     required String recipientEmail,
     required String body,
     required String module,
+    String? subject,
   }) async {
     // El correo tipado por el usuario ES el destinatario principal.
     // Si además hay DESTINATION_EMAIL en .env, se agrega como copia.
     final destinations = <String>[recipientEmail];
     final extra = _destinationEmails.where((e) => e != recipientEmail);
     destinations.addAll(extra);
-    print('[MailHandler] host=$_smtpHost port=$_smtpPort ssl=$_useSsl user=$_username pass=$_password destinations=$destinations');
+    //print('[MailHandler] host=$_smtpHost port=$_smtpPort ssl=$_useSsl user=$_username pass=$_password destinations=$destinations');
     if (destinations.isEmpty) {
-      print('[MailHandler] Sin destinatarios configurados');
+      //print('[MailHandler] Sin destinatarios configurados');
       return false;
     }
 
-    final subject = 'Rednet Demo App – $module';
+    final emailSubject = (subject?.isNotEmpty == true) ? subject! : 'Rednet – $module';
 
     final htmlBody = '''
       <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2 style="color: #0D2B6B;">Rednet and Dyleger Demo App – $module</h2>
+        <h2 style="color: #0D2B6B;">RedNet – $module</h2>
         <hr>
         <p><strong>De:</strong> $recipientEmail</p>
         <hr>
@@ -92,7 +93,7 @@ class MailHandler {
     ''';
 
     final textBody = '''
-Dyleger Demo App – $module
+RedNet – $module
 De: $recipientEmail
 
 $body
@@ -101,24 +102,24 @@ $body
     final message = Message()
       ..from = Address(_fromAddress, _fromName)
       ..recipients.addAll(destinations)
-      ..subject = subject
+      ..subject = emailSubject
       ..text = textBody
       ..html = htmlBody;
 
     try {
-      print('[MailHandler] Enviando...');
+      //print('[MailHandler] Enviando...');
       await send(message, _smtpServer);
-      print('[MailHandler] Enviado OK');
+      //print('[MailHandler] Enviado OK');
       return true;
-    } on MailerException catch (e) {
-      print('[MailHandler] MailerException: $e');
-      for (final p in e.problems) {
-        print('[MailHandler] Problema: ${p.code} - ${p.msg}');
-      }
+    } on MailerException {
+      //print('[MailHandler] MailerException: $e');
+      //for (final p in e.problems) {
+        //print('[MailHandler] Problema: ${p.code} - ${p.msg}');
+      //}
       return false;
-    } catch (e, stack) {
-      print('[MailHandler] Error inesperado: $e');
-      print(stack);
+    } catch (e) {
+      //print('[MailHandler] Error inesperado: $e');
+      //print(stack);
       return false;
     }
   }

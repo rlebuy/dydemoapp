@@ -1,4 +1,4 @@
-package com.dyleger.dydemoapp
+package com.dyleger.rednet
 
 import io.flutter.embedding.android.FlutterActivity
 
