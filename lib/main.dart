@@ -2371,9 +2371,523 @@ class _EnviosPageState extends State<EnviosPage> {
   }
 }
 
-class VentasPage extends StatelessWidget {
+class _Venta {
+  final String codigo;
+  final String nombre;
+  final String valorRaw;
+  final String correo;
+  final String estado;
+  final String cliente;
+  final String fechaCierre;
+  final String ultimaActualizacion;
+
+  const _Venta({
+    required this.codigo,
+    required this.nombre,
+    required this.valorRaw,
+    required this.correo,
+    required this.estado,
+    required this.cliente,
+    required this.fechaCierre,
+    required this.ultimaActualizacion,
+  });
+
+  double get valor {
+    final sanitized = valorRaw.replaceAll('.', '').replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.\-]'), '');
+    return double.tryParse(sanitized) ?? 0;
+  }
+
+  factory _Venta.fromJson(Map<String, dynamic> json) {
+    final code = (json['codigo_venta'] ?? json['tipo_venta'] ?? '').toString();
+    return _Venta(
+      codigo: code,
+      nombre: (json['tipo_venta'] ?? code).toString(),
+      valorRaw: (json['valor'] ?? '0').toString(),
+      correo: (json['correo'] ?? '').toString(),
+      estado: (json['estado'] ?? 'Nuevo lead').toString(),
+      cliente: (json['cliente'] ?? '').toString(),
+      fechaCierre: (json['fecha_cierre'] ?? '').toString(),
+      ultimaActualizacion: (json['ultima_actualizacion'] ?? '').toString(),
+    );
+  }
+}
+
+class VentasPage extends StatefulWidget {
   const VentasPage({super.key});
   @override
-  Widget build(BuildContext context) =>
-      const _ModulePage(titulo: 'Ventas', action: 'ventas');
+  State<VentasPage> createState() => _VentasPageState();
+}
+
+class _VentasPageState extends State<VentasPage> {
+  List<_Venta> _ventas = [];
+  _Venta? _selected;
+  List<Map<String, dynamic>> _historial = [];
+  bool _loading = false;
+  bool _loadingHistorial = false;
+  bool _savingGestion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVentas();
+  }
+
+  Future<void> _loadVentas() async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) return;
+    setState(() => _loading = true);
+    try {
+      final response = await http.get(Uri.parse('$apiUrl?action=ventas')).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          final items = decoded.whereType<Map<String, dynamic>>().map(_Venta.fromJson).toList();
+          setState(() {
+            _ventas = items;
+            if (_selected != null) {
+              _selected = items.where((v) => v.codigo == _selected!.codigo).cast<_Venta?>().firstWhere(
+                    (v) => v != null,
+                    orElse: () => items.isNotEmpty ? items.first : null,
+                  );
+            } else if (items.isNotEmpty) {
+              _selected = items.first;
+            }
+          });
+          if (_selected != null) {
+            await _loadHistorial(_selected!.codigo);
+          }
+        }
+      }
+    } catch (_) {
+      // no-op
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadHistorial(String codigo) async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty || codigo.isEmpty) return;
+    setState(() => _loadingHistorial = true);
+    try {
+      final uri = Uri.parse('$apiUrl?action=actividad&modulo=ventas&codigo=$codigo');
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          setState(() {
+            _historial = decoded.whereType<Map<String, dynamic>>().toList();
+          });
+        } else {
+          setState(() => _historial = []);
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _historial = []);
+    } finally {
+      if (mounted) setState(() => _loadingHistorial = false);
+    }
+  }
+
+  String _money(double value) => '\$${value.toStringAsFixed(0)}';
+
+  String _normalizarEstado(String value) {
+    final v = value.trim().toLowerCase();
+    if (v.contains('ganad')) return 'Cerrada ganada';
+    if (v.contains('perdid')) return 'Cerrada perdida';
+    if (v.contains('cotiz')) return 'Cotización enviada';
+    if (v.contains('negoci')) return 'Negociación';
+    if (v.contains('contact')) return 'Contactado';
+    return 'Nuevo lead';
+  }
+
+  bool _isOpen(String estado) {
+    final normalized = _normalizarEstado(estado);
+    return normalized != 'Cerrada ganada' && normalized != 'Cerrada perdida';
+  }
+
+  int get _abiertasCount => _ventas.where((v) => _isOpen(v.estado)).length;
+  double get _montoAbierto => _ventas.where((v) => _isOpen(v.estado)).fold(0, (acc, v) => acc + v.valor);
+  int get _ganadasCount => _ventas.where((v) => _normalizarEstado(v.estado) == 'Cerrada ganada').length;
+  String get _tasaCierre {
+    final cerradas = _ventas.where((v) {
+      final e = _normalizarEstado(v.estado);
+      return e == 'Cerrada ganada' || e == 'Cerrada perdida';
+    }).length;
+    if (cerradas == 0) return '0%';
+    final rate = (_ganadasCount / cerradas) * 100;
+    return '${rate.toStringAsFixed(0)}%';
+  }
+
+  Future<void> _registrarGestion(String tipo, String titulo) async {
+    if (_selected == null || _savingGestion) return;
+    final comentarioController = TextEditingController();
+    final comentario = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(titulo),
+        content: TextField(
+          controller: comentarioController,
+          maxLines: 4,
+          decoration: const InputDecoration(hintText: 'Describe brevemente la gestión...'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, comentarioController.text.trim()), child: const Text('Guardar')),
+        ],
+      ),
+    );
+    if (!mounted || comentario == null || comentario.isEmpty) return;
+
+    setState(() => _savingGestion = true);
+    try {
+      final payload = {
+        'action': 'registrar_gestion_venta',
+        'codigo_venta': _selected!.codigo,
+        'tipo': tipo,
+        'comentario': comentario,
+        'usuario': 'app',
+      };
+      final registroResp = await _postVentaActivity(payload);
+      if (!mounted) return;
+      if (registroResp['ok'] == true) {
+        final venta = _selected!;
+        final tipoLabel = _tipoGestionLabel(tipo);
+        final body = _buildVentaActivityMailBody(venta: venta, tipoLabel: tipoLabel, comentario: comentario);
+        final recipient = _resolveVentaRecipient(venta);
+        final mailOk = recipient != null &&
+            await MailHandler.sendMessage(
+              recipientEmail: recipient,
+              body: body,
+              module: 'Ventas',
+              subject: 'Ventas: ${venta.codigo} - $tipoLabel',
+            );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              mailOk
+                  ? 'Gestión registrada y correo enviado'
+                  : (recipient == null
+                      ? 'Gestión registrada, pero no hay correo destino'
+                      : 'Gestión registrada, pero falló el correo'),
+            ),
+            backgroundColor: mailOk ? Colors.green : Colors.orange,
+          ),
+        );
+        await _loadVentas();
+        if (_selected != null) await _loadHistorial(_selected!.codigo);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text((registroResp['error'] ?? 'Error al registrar').toString()), backgroundColor: Colors.red),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo registrar la gestión'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _savingGestion = false);
+    }
+  }
+
+  String _tipoGestionLabel(String tipo) {
+    switch (tipo) {
+      case 'contacto':
+        return 'Registrar contacto';
+      case 'cotizacion':
+        return 'Actualizar cotización';
+      case 'cierre_ganado':
+        return 'Cierre ganado';
+      case 'cierre_perdido':
+        return 'Cierre perdido';
+      default:
+        return tipo;
+    }
+  }
+
+  String _buildVentaActivityMailBody({
+    required _Venta venta,
+    required String tipoLabel,
+    required String comentario,
+  }) {
+    final data = <String>[
+      'Actividad en Ventas',
+      'Código venta: ${venta.codigo}',
+      'Oportunidad: ${venta.nombre}',
+      'Tipo de actividad: $tipoLabel',
+      'Estado actual: ${_normalizarEstado(venta.estado)}',
+      'Valor: ${_money(venta.valor)}',
+      'Correo cliente: ${venta.correo}',
+    ];
+    if (venta.cliente.trim().isNotEmpty) {
+      data.add('Cliente: ${venta.cliente}');
+    }
+    if (venta.fechaCierre.trim().isNotEmpty) {
+      data.add('Fecha cierre: ${venta.fechaCierre}');
+    }
+    if (venta.ultimaActualizacion.trim().isNotEmpty) {
+      data.add('Última actualización: ${venta.ultimaActualizacion}');
+    }
+    data
+      ..add('Comentario de gestión: $comentario')
+      ..add('Fecha registro: ${DateTime.now().toIso8601String()}')
+      ..add('Usuario: app');
+    return data.join('\n');
+  }
+
+  String? _resolveVentaRecipient(_Venta venta) {
+    final ventaMail = venta.correo.trim();
+    if (_validEmail(ventaMail)) return ventaMail;
+    final destinations = (dotenv.env['DESTINATION_EMAIL'] ?? '')
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => _validEmail(e))
+        .toList();
+    if (destinations.isNotEmpty) return destinations.first;
+    final mailFrom = (dotenv.env['EMAIL'] ?? '').trim();
+    if (_validEmail(mailFrom)) return mailFrom;
+    return null;
+  }
+
+  bool _validEmail(String v) {
+    return RegExp(r'^[\w.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$').hasMatch(v.trim());
+  }
+
+  Future<Map<String, dynamic>> _postVentaActivity(Map<String, dynamic> payload) async {
+    final apiUrl = dotenv.env['API'];
+    if (apiUrl == null || apiUrl.isEmpty) {
+      return {'ok': false, 'error': 'API no configurada en .env'};
+    }
+    try {
+      final queryParams = payload.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+      final uri = Uri.parse(apiUrl).replace(queryParameters: queryParams);
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        return {'ok': false, 'error': 'HTTP ${response.statusCode}'};
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['success'] == true) {
+        return {'ok': true};
+      }
+      if (decoded is Map<String, dynamic>) {
+        return {'ok': false, 'error': (decoded['error'] ?? 'Respuesta no exitosa').toString()};
+      }
+      return {'ok': false, 'error': 'Respuesta inválida del servidor'};
+    } catch (e) {
+      return {'ok': false, 'error': e.toString()};
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Rednet'),
+        backgroundColor: const Color(0xFF616161).withOpacity(0.85),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        actions: const [_ThemeToggle()],
+      ),
+      body: _Background(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: ValueListenableBuilder<ThemeMode>(
+            valueListenable: _themeNotifier,
+            builder: (_, mode, __) {
+              final isDark = mode == ThemeMode.dark;
+              final cardBg = isDark ? Colors.black.withOpacity(0.40) : Colors.white.withOpacity(0.72);
+              final textColor = isDark ? Colors.white : Colors.black87;
+              final border = isDark ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.15);
+              final muted = isDark ? Colors.white70 : Colors.black54;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Ventas',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      shadows: [
+                        Shadow(color: Colors.black.withOpacity(0.9), blurRadius: 6, offset: const Offset(0, 1)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(10), border: Border.all(color: border)),
+                    child: Wrap(
+                      runSpacing: 8,
+                      spacing: 12,
+                      children: [
+                        Text('Abiertas: $_abiertasCount', style: TextStyle(color: textColor, fontWeight: FontWeight.w600)),
+                        Text('Monto abierto: ${_money(_montoAbierto)}', style: TextStyle(color: textColor)),
+                        Text('Ganadas: $_ganadasCount', style: TextStyle(color: textColor)),
+                        Text('Tasa cierre: $_tasaCierre', style: TextStyle(color: textColor)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    height: 155,
+                    decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(10), border: Border.all(color: border)),
+                    child: _loading
+                        ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                        : _ventas.isEmpty
+                            ? Center(child: Text('Sin ventas disponibles', style: TextStyle(color: muted)))
+                            : ListView.separated(
+                                itemCount: _ventas.length,
+                                separatorBuilder: (_, __) => Divider(height: 1, color: border),
+                                itemBuilder: (_, i) {
+                                  final v = _ventas[i];
+                                  final selected = _selected?.codigo == v.codigo;
+                                  return ListTile(
+                                    dense: true,
+                                    selected: selected,
+                                    selectedTileColor: (isDark ? Colors.white : const Color(0xFF0D2B6B)).withOpacity(0.12),
+                                    title: Text(v.nombre, style: TextStyle(color: textColor, fontWeight: FontWeight.w600)),
+                                    subtitle: Text('${_money(v.valor)} · ${_normalizarEstado(v.estado)}', style: TextStyle(color: muted)),
+                                    onTap: () async {
+                                      setState(() => _selected = v);
+                                      await _loadHistorial(v.codigo);
+                                    },
+                                  );
+                                },
+                              ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(10), border: Border.all(color: border)),
+                            child: _selected == null
+                                ? Text('Selecciona una venta para ver detalle', style: TextStyle(color: muted))
+                                : Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Detalle de venta', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                      const SizedBox(height: 8),
+                                      Text('Código: ${_selected!.codigo}', style: TextStyle(color: textColor)),
+                                      Text('Oportunidad: ${_selected!.nombre}', style: TextStyle(color: textColor)),
+                                      Text('Estado: ${_normalizarEstado(_selected!.estado)}', style: TextStyle(color: textColor)),
+                                      Text('Valor: ${_money(_selected!.valor)}', style: TextStyle(color: textColor)),
+                                      Text('Correo: ${_selected!.correo}', style: TextStyle(color: textColor)),
+                                      if (_selected!.cliente.trim().isNotEmpty)
+                                        Text('Cliente: ${_selected!.cliente}', style: TextStyle(color: textColor)),
+                                      if (_selected!.fechaCierre.trim().isNotEmpty)
+                                        Text('Fecha cierre: ${_selected!.fechaCierre}', style: TextStyle(color: textColor)),
+                                      if (_selected!.ultimaActualizacion.trim().isNotEmpty)
+                                        Text('Última actualización: ${_selected!.ultimaActualizacion}', style: TextStyle(color: textColor)),
+                                    ],
+                                  ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(10), border: Border.all(color: border)),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Acciones', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('contacto', 'Registrar contacto'),
+                                      child: const Text('Registrar contacto'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('cotizacion', 'Enviar/actualizar cotización'),
+                                      child: const Text('Actualizar cotización'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('cierre_ganado', 'Marcar cierre ganado'),
+                                      child: const Text('Cierre ganado'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: (_selected == null || _savingGestion)
+                                          ? null
+                                          : () => _registrarGestion('cierre_perdido', 'Marcar cierre perdido'),
+                                      child: const Text('Cierre perdido'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(10), border: Border.all(color: border)),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Historial', style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 8),
+                                if (_selected == null)
+                                  Text('Selecciona una venta para ver actividad', style: TextStyle(color: muted))
+                                else if (_loadingHistorial)
+                                  const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                                else if (_historial.isEmpty)
+                                  Text('Sin actividad registrada', style: TextStyle(color: muted))
+                                else
+                                  ..._historial.map((e) {
+                                    final tipo = (e['tipo'] ?? '').toString();
+                                    final detalle = (e['detalle'] ?? '').toString();
+                                    final fecha = (e['fecha'] ?? '').toString();
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: Text('• [$tipo] $detalle${fecha.isNotEmpty ? ' ($fecha)' : ''}',
+                                          style: TextStyle(color: textColor)),
+                                    );
+                                  }),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isDark ? Colors.white : const Color(0xFF0D2B6B),
+                                foregroundColor: isDark ? const Color(0xFF0D2B6B) : Colors.white,
+                                textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Text('Volver'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 }

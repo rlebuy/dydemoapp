@@ -18,6 +18,8 @@ function doGet(e) {
     return registrarGestionFactura(sheet, e.parameter || {});
   } else if (action == "registrar_gestion_envio") {
     return registrarGestionEnvio(sheet, e.parameter || {});
+  } else if (action == "registrar_gestion_venta") {
+    return registrarGestionVenta(sheet, e.parameter || {});
   } else if (action == "actualizar_estado_soporte") {
     return actualizarEstadoSoporte(sheet, e.parameter || {});
   } else if (action == "agregar_comentario_soporte") {
@@ -55,6 +57,9 @@ function doPost(e) {
   if (!payload.codigo_envio && e.parameter && e.parameter.codigo_envio) {
     payload.codigo_envio = e.parameter.codigo_envio;
   }
+  if (!payload.codigo_venta && e.parameter && e.parameter.codigo_venta) {
+    payload.codigo_venta = e.parameter.codigo_venta;
+  }
   if (!payload.tipo && e.parameter && e.parameter.tipo) {
     payload.tipo = e.parameter.tipo;
   }
@@ -69,6 +74,8 @@ function doPost(e) {
     return registrarGestionFactura(sheet, payload);
   } else if (action == "registrar_gestion_envio") {
     return registrarGestionEnvio(sheet, payload);
+  } else if (action == "registrar_gestion_venta") {
+    return registrarGestionVenta(sheet, payload);
   }
 
   return jsonResponse({
@@ -206,13 +213,33 @@ function getSoportes(sheet) {
 
 // 💰 Ventas
 function getVentas(sheet) {
-  var data = sheet.getSheetByName("Ventas").getDataRange().getValues();
+  var sh = sheet.getSheetByName("Ventas");
+  if (!sh) return jsonResponse([]);
+  var data = sh.getDataRange().getValues();
+  if (data.length < 2) return jsonResponse([]);
+  var headerMap = getHeaderIndexMap(sh);
+  function fromHeaderOrIndex(header, fallback) {
+    return Object.prototype.hasOwnProperty.call(headerMap, header) ? headerMap[header] : fallback;
+  }
+  var codigoIndex = fromHeaderOrIndex("codigo_venta", 0);
+  var nombreIndex = fromHeaderOrIndex("tipo_venta", 0);
+  var valorIndex = fromHeaderOrIndex("valor", 1);
+  var correoIndex = fromHeaderOrIndex("correo", 2);
+  var estadoIndex = fromHeaderOrIndex("estado", 3);
+  var clienteIndex = fromHeaderOrIndex("cliente", 4);
+  var fechaCierreIndex = fromHeaderOrIndex("fecha_cierre", 5);
+  var actualizacionIndex = fromHeaderOrIndex("ultima_actualizacion", 6);
   var result = [];
   for (var i = 1; i < data.length; i++) {
     result.push({
-      tipo_venta: data[i][0],
-      valor: data[i][1],
-      correo: data[i][2]
+      codigo_venta: data[i][codigoIndex],
+      tipo_venta: data[i][nombreIndex],
+      valor: data[i][valorIndex],
+      correo: data[i][correoIndex],
+      estado: estadoIndex >= 0 ? (data[i][estadoIndex] || "Nuevo lead") : "Nuevo lead",
+      cliente: clienteIndex >= 0 ? (data[i][clienteIndex] || "") : "",
+      fecha_cierre: fechaCierreIndex >= 0 ? asIsoDate(data[i][fechaCierreIndex]) : "",
+      ultima_actualizacion: actualizacionIndex >= 0 ? asIsoDate(data[i][actualizacionIndex]) : ""
     });
   }
   return jsonResponse(result);
@@ -234,10 +261,10 @@ function getUsuarios(sheet) {
 function getActividad(sheet, e) {
   var modulo = (e.parameter.modulo || "").toString().trim().toLowerCase();
   var codigo = (e.parameter.codigo || "").toString().trim();
-  if ((modulo != "soportes" && modulo != "facturas" && modulo != "envios") || !codigo) {
+  if ((modulo != "soportes" && modulo != "facturas" && modulo != "envios" && modulo != "ventas") || !codigo) {
     return jsonResponse({
       success: false,
-      error: "Parámetros inválidos. Usa modulo=soportes|facturas|envios y codigo=<codigo>."
+      error: "Parámetros inválidos. Usa modulo=soportes|facturas|envios|ventas y codigo=<codigo>."
     });
   }
 
@@ -298,6 +325,17 @@ function findEnvioRowByCodigo(sh, codigoEnvio) {
   for (var i = 1; i < data.length; i++) {
     var codigo = (data[i][1] || "").toString().trim();
     if (codigo == codigoEnvio) return i + 1;
+  }
+  return -1;
+}
+
+function findVentaRowByCodigo(sh, codigoVenta) {
+  var data = sh.getDataRange().getValues();
+  var headerMap = getHeaderIndexMap(sh);
+  var codigoIndex = Object.prototype.hasOwnProperty.call(headerMap, "codigo_venta") ? headerMap["codigo_venta"] : 0;
+  for (var i = 1; i < data.length; i++) {
+    var codigo = (data[i][codigoIndex] || "").toString().trim();
+    if (codigo == codigoVenta) return i + 1;
   }
   return -1;
 }
@@ -366,6 +404,37 @@ function registrarGestionEnvio(sheet, payload) {
   envioSheet.getRange(rowNumber, estadoCol).setValue(nuevoEstado);
   envioSheet.getRange(rowNumber, actualizacionCol).setValue(new Date());
   appendActividadModulo(sheet, "envios", tipo, codigoEnvio, comentario, usuario);
+  return jsonResponse({ success: true });
+}
+
+function registrarGestionVenta(sheet, payload) {
+  var codigoVenta = (payload.codigo_venta || "").toString().trim();
+  var tipo = (payload.tipo || "").toString().trim().toLowerCase();
+  var comentario = (payload.comentario || "").toString().trim();
+  var usuario = (payload.usuario || "app").toString().trim();
+  if (!codigoVenta || !tipo || !comentario) {
+    return jsonResponse({ success: false, error: "codigo_venta, tipo y comentario son obligatorios." });
+  }
+
+  var ventaSheet = sheet.getSheetByName("Ventas");
+  if (!ventaSheet) {
+    return jsonResponse({ success: false, error: "No existe la hoja Ventas." });
+  }
+  var rowNumber = findVentaRowByCodigo(ventaSheet, codigoVenta);
+  if (rowNumber < 0) {
+    return jsonResponse({ success: false, error: "No se encontró la venta." });
+  }
+
+  var estadoCol = ensureColumn(ventaSheet, "estado") + 1;
+  var actualizacionCol = ensureColumn(ventaSheet, "ultima_actualizacion") + 1;
+  var nuevoEstado = "Contactado";
+  if (tipo == "contacto") nuevoEstado = "Contactado";
+  if (tipo == "cotizacion") nuevoEstado = "Cotización enviada";
+  if (tipo == "cierre_ganado") nuevoEstado = "Cerrada ganada";
+  if (tipo == "cierre_perdido") nuevoEstado = "Cerrada perdida";
+  ventaSheet.getRange(rowNumber, estadoCol).setValue(nuevoEstado);
+  ventaSheet.getRange(rowNumber, actualizacionCol).setValue(new Date());
+  appendActividadModulo(sheet, "ventas", tipo, codigoVenta, comentario, usuario);
   return jsonResponse({ success: true });
 }
 
