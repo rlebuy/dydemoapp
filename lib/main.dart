@@ -31,6 +31,21 @@ class _ThemeToggle extends StatelessWidget {
   }
 }
 
+class _BackToMainMenuArrow extends StatelessWidget {
+  const _BackToMainMenuArrow();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Volver al menú principal',
+      icon: const Icon(Icons.arrow_back),
+      onPressed: () {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      },
+    );
+  }
+}
+
 // ── Fondo reutilizable ──────────────────────────────────────────────────────
 class _Background extends StatelessWidget {
   final Widget child;
@@ -690,6 +705,7 @@ class _FacturasPageState extends State<FacturasPage> {
         foregroundColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
+        leading: const _BackToMainMenuArrow(),
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
@@ -1033,6 +1049,7 @@ class _ModulePageState extends State<_ModulePage> {
         foregroundColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
+        leading: const _BackToMainMenuArrow(),
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
@@ -1570,6 +1587,7 @@ class _SoportePageState extends State<SoportePage> {
         foregroundColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
+        leading: const _BackToMainMenuArrow(),
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
@@ -2143,6 +2161,7 @@ class _EnviosPageState extends State<EnviosPage> {
         foregroundColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
+        leading: const _BackToMainMenuArrow(),
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
@@ -2689,6 +2708,7 @@ class _VentasPageState extends State<VentasPage> {
         foregroundColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
+        leading: const _BackToMainMenuArrow(),
         actions: const [_ThemeToggle()],
       ),
       body: _Background(
